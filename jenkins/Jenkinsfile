@@ -1,28 +1,82 @@
 pipeline {
     agent any
+    environment {
+        SONARQUBE_SERVER = 'http://localhost:9000'
+        DOCKER_IMAGE = 'shanthanreddy80/spring-petclinic:latest'
+    }
     options {
         skipStagesAfterUnstable()
     }
     stages {
-        stage('Build') {
+
+        stage('Checkout') {
             steps {
-                sh 'mvn -B -DskipTests clean package'
+                // Checks out your GitHub repo (from Jenkins job config)
+                checkout scm
             }
         }
-        stage('Test') {
+        
+        stage('Build') {
             steps {
-                sh 'mvn test'
-            }
-            post {
-                always {
-                    junit 'target/surefire-reports/*.xml'
+                script {
+                    docker.image('openjdk:17-jdk').inside {
+                        sh './mvnw clean package'
+                    }
                 }
             }
         }
-        stage('Deliver') { 
+
+        stage('Test') {
             steps {
-                sh './jenkins/scripts/deliver.sh' 
+                script {
+                    docker.image('openjdk:17-jdk').inside {
+                        sh './mvnw test'
+                    }
+                }
+            }
+        }
+
+        stage('Static Code Analysis') {
+            steps {
+                script {
+                    docker.image('openjdk:17-jdk').inside {
+                        sh "./mvnw sonar:sonar -Dsonar.host.url=${SONARQUBE_SERVER}"
+                    }
+                }
+            }
+        }
+
+         stage('Build Docker Image') {
+            steps {
+                script {
+                    sh "docker build -t ${DOCKER_IMAGE} ."
+                }
+            }
+        }
+
+        stage('Push to Docker Hub') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh "echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin"
+                    sh "docker push ${DOCKER_IMAGE}"
+                }
+            }
+        }
+        
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    // Assuming kubectl is already configured inside Jenkins agent
+                    sh 'kubectl apply -f deployment.yaml'
+                }
             }
         }
     }
 }
+
+
+       
